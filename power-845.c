@@ -38,7 +38,9 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
-
+#include <inttypes.h>
+#include <stddef.h>
+#include <cutils/properties.h>
 #define LOG_TAG "QTI PowerHAL"
 #include <hardware/hardware.h>
 #include <hardware/power.h>
@@ -53,7 +55,11 @@
 static int display_fd;
 #define SYS_DISPLAY_PWR "/sys/kernel/hbtp/display_pwr"
 
+#define FPS_PATH   "/sys/devices/platform/soc/ae00000.qcom,mdss_mdp/drm/card0/sde-crtc-0/measured_fps"
+
 #define NUM_PERF_MODES 3
+
+int fps_path;
 
 const int kMinInteractiveDuration = 100;  /* ms */
 const int kMaxInteractiveDuration = 5000; /* ms */
@@ -223,39 +229,25 @@ static void process_interaction_hint(void* data) {
     }
 
     interaction_handle =
-            perf_hint_enable_with_type(VENDOR_HINT_SCROLL_BOOST, duration, SCROLL_VERTICAL);
+            perf_hint_enable_with_type(VENDOR_HINT_FIRST_LAUNCH_BOOST,
+                                                   kMaxLaunchDuration, LAUNCH_BOOST_V3);
 }
 
-static int process_activity_launch_hint(void* data) {
-    static int launch_handle = -1;
-    static int launch_mode = 0;
 
-    // release lock early if launch has finished
-    if (!data) {
-        if (CHECK_HANDLE(launch_handle)) {
-            release_request(launch_handle);
-            launch_handle = -1;
-        }
-        launch_mode = 0;
-        return HINT_HANDLED;
+void get_int(const char* file_path, int* value, int fallback_value) {
+    FILE *file;
+    file = fopen(file_path, "r");
+    if (file == NULL) {
+        *value = fallback_value;
+        return;
     }
-
-    if (current_mode != NORMAL_MODE) {
-        ALOGV("%s: ignoring due to other active perf hints", __func__);
-    } else if (!launch_mode) {
-        launch_handle = perf_hint_enable_with_type(VENDOR_HINT_FIRST_LAUNCH_BOOST,
-                                                   kMaxLaunchDuration, LAUNCH_BOOST_V1);
-        if (!CHECK_HANDLE(launch_handle)) {
-            ALOGE("Failed to perform launch boost");
-            return HINT_NONE;
-        }
-        launch_mode = 1;
-    }
-    return HINT_HANDLED;
+    fscanf(file, "%d", value);
+    fclose(file);
 }
 
 int power_hint_override(power_hint_t hint, void* data) {
     int ret_val = HINT_NONE;
+    char fps_status[PROPERTY_VALUE_MAX];
     switch (hint) {
         case POWER_HINT_VIDEO_ENCODE:
             ret_val = process_video_encode_hint(data);
@@ -267,11 +259,18 @@ int power_hint_override(power_hint_t hint, void* data) {
             ret_val = process_perf_hint(data, VR_MODE);
             break;
         case POWER_HINT_INTERACTION:
+           property_get("vendor.fps.boost", fps_status, false);
+          if(strcmp(fps_status, "true") == 0) {              
+            get_int(FPS_PATH, &fps_path, 0);
+            if (fps_path < 58) {                     
             process_interaction_hint(data);
             ret_val = HINT_HANDLED;
+            } else {
+            ALOGI("fps boost not enabled");
+              }            
+            }            
             break;
         case POWER_HINT_LAUNCH:
-            ret_val = process_activity_launch_hint(data);
             break;
         default:
             break;
