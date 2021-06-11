@@ -36,6 +36,13 @@
 #include "performance.h"
 #include "power-common.h"
 #include "utils.h"
+#include <inttypes.h>
+#include <stddef.h>
+#include <cutils/properties.h>
+
+#define FPS_PATH   "/sys/devices/platform/soc/5e00000.qcom,mdss_mdp/drm/card0/sde-crtc-0/measured_fps"
+
+int fps_path;
 
 const int kMinInteractiveDuration = 100;  /* ms */
 const int kMaxInteractiveDuration = 5000; /* ms */
@@ -74,8 +81,8 @@ static int process_interaction_hint(void* data) {
         release_request(interaction_handle);
     }
 
-    interaction_handle = perf_hint_enable_with_type(VENDOR_HINT_SCROLL_BOOST,
-                                                    duration, SCROLL_VERTICAL);
+    interaction_handle = perf_hint_enable_with_type(VENDOR_HINT_FIRST_LAUNCH_BOOST,
+                                                   kMaxLaunchDuration, LAUNCH_BOOST_V3);
     if (!CHECK_HANDLE(interaction_handle)) {
         ALOGE("Failed to perform interaction boost");
         return HINT_NONE;
@@ -83,41 +90,33 @@ static int process_interaction_hint(void* data) {
     return HINT_HANDLED;
 }
 
-static int process_activity_launch_hint(void* data) {
-    static int launch_handle = -1;
-    static int launch_mode = 0;
-
-    // release lock early if launch has finished
-    if (!data) {
-        if (CHECK_HANDLE(launch_handle)) {
-            release_request(launch_handle);
-            launch_handle = -1;
-        }
-        launch_mode = 0;
-        return HINT_HANDLED;
+void get_int(const char* file_path, int* value, int fallback_value) {
+    FILE *file;
+    file = fopen(file_path, "r");
+    if (file == NULL) {
+        *value = fallback_value;
+        return;
     }
-
-    if (!launch_mode) {
-        launch_handle = perf_hint_enable_with_type(VENDOR_HINT_FIRST_LAUNCH_BOOST,
-                                                   kMaxLaunchDuration, LAUNCH_BOOST_V1);
-        if (!CHECK_HANDLE(launch_handle)) {
-            ALOGE("Failed to perform launch boost");
-            return HINT_NONE;
-        }
-        launch_mode = 1;
-    }
-    return HINT_HANDLED;
+    fscanf(file, "%d", value);
+    fclose(file);
 }
-
+    
 int power_hint_override(power_hint_t hint, void* data) {
     int ret_val = HINT_NONE;
-
+    char fps_status[PROPERTY_VALUE_MAX];
     switch (hint) {
         case POWER_HINT_INTERACTION:
+           property_get("vendor.fps.boost", fps_status, false);
+          if(strcmp(fps_status, "true") == 0) {              
+            get_int(FPS_PATH, &fps_path, 0);
+            if (fps_path < 58) {           
             ret_val = process_interaction_hint(data);
+            } else {
+            ALOGI("fps boost not enabled");
+              }            
+            }            
             break;
         case POWER_HINT_LAUNCH:
-            ret_val = process_activity_launch_hint(data);
             break;
         default:
             break;
