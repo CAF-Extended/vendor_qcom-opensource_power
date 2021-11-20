@@ -38,7 +38,9 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
-
+#include <inttypes.h>
+#include <stddef.h>
+#include <cutils/properties.h>
 #define LOG_TAG "QTI PowerHAL"
 #include <hardware/hardware.h>
 #include <hardware/power.h>
@@ -52,9 +54,10 @@
 
 static int display_fd;
 #define SYS_DISPLAY_PWR "/sys/kernel/hbtp/display_pwr"
-
+#define BS_PATH   "/sys/module/battery_saver/parameters/enabled"
 #define NUM_PERF_MODES 3
 
+int bs_path;
 const int kMinInteractiveDuration = 100;  /* ms */
 const int kMaxInteractiveDuration = 5000; /* ms */
 const int kMaxLaunchDuration = 5000;      /* ms */
@@ -254,6 +257,17 @@ static int process_activity_launch_hint(void* data) {
     return HINT_HANDLED;
 }
 
+void get_int(const char* file_path, int* value, int fallback_value) {
+    FILE *file;
+    file = fopen(file_path, "r");
+    if (file == NULL) {
+        *value = fallback_value;
+        return;
+    }
+    fscanf(file, "%d", value);
+    fclose(file);
+}
+    
 int power_hint_override(power_hint_t hint, void* data) {
     int ret_val = HINT_NONE;
     switch (hint) {
@@ -267,8 +281,13 @@ int power_hint_override(power_hint_t hint, void* data) {
             ret_val = process_perf_hint(data, VR_MODE);
             break;
         case POWER_HINT_INTERACTION:
+            get_int(BS_PATH, &bs_path, 0);
+            if (bs_path < 1) {
             process_interaction_hint(data);
             ret_val = HINT_HANDLED;
+            } else {
+            ALOGI("interaction boost not enabled");
+             }
             break;
         case POWER_HINT_LAUNCH:
             ret_val = process_activity_launch_hint(data);
